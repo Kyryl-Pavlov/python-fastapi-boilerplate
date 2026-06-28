@@ -7,7 +7,9 @@ from jose import JWTError, jwt
 
 from app.config import config
 
-bearer = HTTPBearer(auto_error=False)  # auto_error=False lets us raise 401 instead of 403
+bearer = HTTPBearer(
+    auto_error=False
+)  # auto_error=False lets us raise 401 instead of 403
 
 
 def settings():
@@ -68,7 +70,7 @@ def get_token_from_bearer(auth_header: str) -> str:
     """Extract raw JWT from 'Bearer <token>' string. Raises ValueError if malformed."""
     if not auth_header.startswith("Bearer "):
         raise ValueError("Missing or invalid Authorization header")
-    return auth_header[len("Bearer "):]
+    return auth_header[len("Bearer ") :]
 
 
 # ── FastAPI dependency helpers ──────────────────────────────────────────────

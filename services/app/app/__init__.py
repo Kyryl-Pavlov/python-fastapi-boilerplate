@@ -14,7 +14,6 @@ from .logging.logger import AppLogger, ConsoleLogger
 from .logging.loki_logger import LokiLogger
 from .services.cache_service import CacheService
 
-
 REST_API_V = os.environ.get("REST_API_V", "v1")
 api_module = importlib.import_module(f".api.{REST_API_V}", package=__name__)
 

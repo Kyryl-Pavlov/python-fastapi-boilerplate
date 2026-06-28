@@ -1,9 +1,10 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from strawberry.fastapi import BaseContext
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
+
     from app.logging.logger import AppLogger
     from app.services.cache_service import CacheService
 

@@ -14,8 +14,8 @@ if alembic_config.config_file_name is not None:
 logger = logging.getLogger("alembic.env")
 
 # Import Base and all models so autogenerate can detect changes
-from app.extensions import Base  # noqa: E402
 import app.models  # noqa: E402, F401
+from app.extensions import Base  # noqa: E402
 
 target_metadata = Base.metadata
 

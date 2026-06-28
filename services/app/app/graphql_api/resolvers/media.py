@@ -7,6 +7,12 @@ from app.graphql_api.types.types import MediaPayload, Response
 from app.security import get_token_from_bearer, verify_access_token
 from app.services.aws_s3_service import get_presigned_url, upload_file
 
+_ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "gif", "webp", "pdf", "mp4", "mov"}
+
+
+def _allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in _ALLOWED_EXTENSIONS
+
 
 @strawberry.type
 class MediaQueries:
@@ -51,8 +57,15 @@ class MediaMutations:
         except Exception as e:
             return Response(success=False, message="Unauthorized", exc=e)
 
+        if not file.filename or not _allowed_file(file.filename):
+            allowed = ", ".join(sorted(_ALLOWED_EXTENSIONS))
+            return Response(
+                success=False,
+                message=f"File type not allowed. Permitted: {allowed}",
+            )
+
         try:
-            s3_key = upload_file(file, user_id, file.filename)
+            s3_key = upload_file(file.file, user_id, file.filename)
         except Exception as e:
             return Response(success=False, message="File upload failed", exc=e)
 

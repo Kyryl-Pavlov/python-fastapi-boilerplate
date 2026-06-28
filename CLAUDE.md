@@ -10,19 +10,19 @@ The following security controls are intentionally in place. Do not remove or wea
 
 | Measure | Location | Rule |
 |---|---|---|
-| `SECRET_KEY` fail-fast | `app/config.py` — `_require()` | Raises `RuntimeError` at startup if unset. Never add a default fallback value. |
+| `SECRET_KEY` fail-fast | `services/app/app/config.py` — `_require()` | Raises `RuntimeError` at startup if unset. Never add a default fallback value. |
 | Upload size limit | `nginx/nginx.conf` — `client_max_body_size 50m` | Applied on both `/api/` and `/graphql` locations. FastAPI itself has no built-in size cap; Nginx is the enforcement point. |
-| File upload allowlist | `app/api/v1/media.py` — `_ALLOWED_EXTENSIONS` | Allowlist of safe extensions only. Extend deliberately; never switch to a blocklist. |
-| SQL masking in logs | `app/logging/data_filter.py` — `sanitize_traceback()` | Strips `[SQL: ...]`, `[parameters: ...]`, and connection strings from every traceback before it reaches any log backend. Lambda has an inline equivalent `_safe_exc()` in `lambda/handler.py`. |
-| GraphQL introspection | `app/graphql_api/__init__.py` + `app/config.py` | `GRAPHQL_INTROSPECTION = True` in `DevelopmentConfig` only; `False` in `ProductionConfig`. Do not hardcode `True`. |
-| Explicit JWT algorithm | `app/config.py` — `JWT_ALGORITHM = "HS256"` | Pinned to prevent silent algorithm changes on library upgrades. |
+| File upload allowlist | `services/app/app/api/v1/media.py` — `_ALLOWED_EXTENSIONS` | Allowlist of safe extensions only. Extend deliberately; never switch to a blocklist. |
+| SQL masking in logs | `services/app/app/logging/data_filter.py` — `sanitize_traceback()` | Strips `[SQL: ...]`, `[parameters: ...]`, and connection strings from every traceback before it reaches any log backend. Lambda has an inline equivalent `_safe_exc()` in `lambda/handler.py`. |
+| GraphQL introspection | `services/app/app/graphql_api/__init__.py` + `services/app/app/config.py` | `GRAPHQL_INTROSPECTION = True` in `DevelopmentConfig` only; `False` in `ProductionConfig`. Do not hardcode `True`. |
+| Explicit JWT algorithm | `services/app/app/config.py` — `JWT_ALGORITHM = "HS256"` | Pinned to prevent silent algorithm changes on library upgrades. |
 
 ### Infrastructure (Terraform)
 
 | Measure | Location | Rule |
 |---|---|---|
 | Redis TLS | `terraform/modules/elasticache/main.tf` | `transit_encryption_enabled = true`. Output URL is `rediss://` (double-s). Both must stay in sync. |
-| Non-root containers | `Dockerfile`, `lambda/Dockerfile`, `lambda/Dockerfile.lambda` | App uses a `app` system user; Lambda uses `nobody`. The `USER` instruction must remain after all `COPY`/`RUN` steps. |
+| Non-root containers | `services/app/Dockerfile`, `lambda/Dockerfile`, `lambda/Dockerfile.lambda` | App uses a `app` system user; Lambda uses `nobody`. The `USER` instruction must remain after all `COPY`/`RUN` steps. |
 | ECS task role SQS scope | `terraform/modules/iam/main.tf` | FastAPI app: `sqs:SendMessage` + `sqs:GetQueueAttributes` only. Lambda worker: `ReceiveMessage` + `DeleteMessage`. Never cross-assign. |
 | Secrets Manager recovery | `terraform/main.tf`, `terraform/modules/rds/main.tf` | `recovery_window_in_days = 7`. Never set to `0` in committed code (risk of unrecoverable accidental deletion). |
 | WAF logging | `terraform/modules/waf/main.tf` | CloudWatch log group `aws-waf-logs-{prefix}`, 90-day retention. Do not remove `aws_wafv2_web_acl_logging_configuration`. |
@@ -72,21 +72,13 @@ docker compose logs -f app
 bash migrate.sh
 ```
 
-**`start_infra.sh`** — starts only the infrastructure services (Postgres, LocalStack, migrations) in detached mode. Used when running the FastAPI app on the host for local debugging.
+**`launch_app_docker_image.sh`** — builds and launches a single service container standalone. Accepts an optional service name argument (default: `app`).
 
 ```bash
-bash start_infra.sh
-# To stop: docker compose stop postgres localstack
+bash launch_app_docker_image.sh          # builds services/app/Dockerfile
+bash launch_app_docker_image.sh payments # builds services/payments/Dockerfile for future services
+# To stop: docker stop fastapi-boilerplate-<service>
 ```
-
-**`launch_app_docker_image.sh`** — builds the production Docker image standalone (no compose, no infrastructure) and starts a single detached container on port 5000. Useful for smoke-testing the image in isolation. After startup it hits `/api/v1/health` to verify the server is up and prints the GraphQL playground URL.
-
-```bash
-bash launch_app_docker_image.sh
-# To stop: docker stop fastapi-boilerplate
-```
-
-> Note: this script starts only the app container with no database or LocalStack, so any endpoint that touches Postgres or S3 will fail. Use it only to verify the image builds and the process starts cleanly.
 
 ## Debugging
 
@@ -140,28 +132,74 @@ Other services reach the FastAPI app internally via `http://app:5000` (direct) o
 
 **Environment:** All config lives in `.env.local`, loaded via `env_file` in compose. Never committed — use `.env.local` as the single source of truth for local development.
 
+## Multi-service Python path (`pyproject.toml`)
+
+`pyproject.toml` lives at the repo root and serves as the single pytest + ruff config. The `pythonpath` array controls which service directories pytest adds to `sys.path`:
+
+```toml
+[tool.pytest.ini_options]
+pythonpath = ["services/app"]  # one entry per Python microservice
+```
+
+When you add a new Python service, append its directory: `pythonpath = ["services/app", "services/payments"]`.
+
+## Services Layout
+
+Microservices live under `services/`. Each service is self-contained with its own Dockerfiles.
+
+```
+services/
+└── app/                     # FastAPI REST + GraphQL API
+    ├── app/                 # Python package (app factory, models, routes, etc.)
+    ├── Dockerfile           # Production image (uvicorn)
+    └── Dockerfile.dev       # Dev image (uvicorn + debugpy, hot-reload via volume)
+```
+
+### Docker build pattern
+
+Build context stays at `.` (repo root) so Dockerfiles can access `requirements.txt`, `migrations/`, `alembic.ini`, and `wsgi.py`. Only the `dockerfile:` path points into `services/`:
+
+```yaml
+build:
+  context: .
+  dockerfile: services/app/Dockerfile
+```
+
+### Dev volume mounts
+
+`app` and `migrate` services mount `./services/app:/app`. The `migrate` service also mounts `./migrations:/app/migrations` and `./alembic.ini:/app/alembic.ini` since Alembic files stay at the repo root.
+
+### Adding a new microservice
+
+1. Create `services/<name>/` with `Dockerfile` and `Dockerfile.dev`.
+2. Add to `docker-compose.yml` with `context: .` and `dockerfile: services/<name>/Dockerfile.dev`.
+3. Add Nginx upstream + location in `nginx/nginx.conf`.
+4. Add build step in `deploy-dev.yml` and `deploy-prod.yml` with `context: .` and `file: services/<name>/Dockerfile`.
+5. Add ECR repo in `terraform/modules/ecr/main.tf` and ECS service in `terraform/`.
+6. Append `"services/<name>"` to `pythonpath` in `pyproject.toml`.
+
 ## Architecture
 
 ### App Factory
 
-`app/__init__.py` uses a factory pattern (`create_app(config_name)`). The REST API version is selected dynamically via the `REST_API_V` env var (default `v1`) using `importlib`, enabling multi-version support without code changes.
+`services/app/app/__init__.py` uses a factory pattern (`create_app(config_name)`). The REST API version is selected dynamically via the `REST_API_V` env var (default `v1`) using `importlib`, enabling multi-version support without code changes.
 
 ### Dual API Layer
 
 Every feature is exposed over both REST and GraphQL. Both share the same models and services — only the transport layer differs.
 
-- **REST:** `app/api/v1/` — `APIRouter` mounted at `/api/v1/`
-- **GraphQL:** `app/graphql_api/` — Strawberry `GraphQLRouter` at `/graphql`, with `multipart_uploads_enabled=True` for file uploads
+- **REST:** `services/app/app/api/v1/` — `APIRouter` mounted at `/api/v1/`
+- **GraphQL:** `services/app/app/graphql_api/` — Strawberry `GraphQLRouter` at `/graphql`, with `multipart_uploads_enabled=True` for file uploads
 
-GraphQL resolvers do not use `Depends(require_access_token)` (a FastAPI dependency) — they call `get_token_from_bearer()` / `verify_access_token()` from `app/security.py` manually at the top of each resolver, since Strawberry handles the request context differently. The JWT identity and request are available via `info.context.request.headers` and `info.context.db`.
+GraphQL resolvers do not use `Depends(require_access_token)` (a FastAPI dependency) — they call `get_token_from_bearer()` / `verify_access_token()` from `services/app/app/security.py` manually at the top of each resolver, since Strawberry handles the request context differently. The JWT identity and request are available via `info.context.request.headers` and `info.context.db`.
 
 ### Configuration
 
-`app/config.py` has three config classes (`DevelopmentConfig`, `ProductionConfig`, `TestingConfig`) all inheriting from `Config`. The production image (`wsgi.py`) runs `create_app('production')`. All AWS/S3 settings must be on the base `Config` class, not only on `DevelopmentConfig`, or they will be absent in production mode.
+`services/app/app/config.py` has three config classes (`DevelopmentConfig`, `ProductionConfig`, `TestingConfig`) all inheriting from `Config`. The production image (`wsgi.py`) runs `create_app('production')`. All AWS/S3 settings must be on the base `Config` class, not only on `DevelopmentConfig`, or they will be absent in production mode.
 
 ### S3 / LocalStack Split Endpoint
 
-The S3 service (`app/services/aws_s3_service.py`) maintains two boto3 client modes:
+The S3 service (`services/app/app/services/aws_s3_service.py`) maintains two boto3 client modes:
 
 - `_client()` — uses `AWS_S3_ENDPOINT_URL` (`http://localstack:4566`) for internal operations (upload). Resolvable only inside Docker.
 - `_client(public=True)` — uses `AWS_S3_PUBLIC_ENDPOINT_URL` (`http://localhost:4566`) for generating presigned URLs. Needed because presigned URLs are opened by the browser on the host machine, which cannot resolve the `localstack` hostname.
@@ -170,7 +208,7 @@ In production both env vars are unset (`None`), so boto3 routes to real AWS auto
 
 ### Models
 
-All models must be imported in `app/models/__init__.py` for Alembic to detect them via `Base.metadata`. Current models:
+All models must be imported in `services/app/app/models/__init__.py` for Alembic to detect them via `Base.metadata`. Current models:
 
 - `User` — `id` (UUID PK), `email` (unique), `password_hash`, `created_at`
 - `Media` — `id` (UUID PK), `user_id` (FK → users), `content_key` (S3 object key, **not** a URL), `created_at`
@@ -179,15 +217,15 @@ All models must be imported in `app/models/__init__.py` for Alembic to detect th
 
 ### Logging
 
-The app uses an Object Adapter pattern. All loggers implement `LoggerProtocol` (`app/utils/logger.py`) and are injected into `AppLogger`, which fans out calls to all of them.
+The app uses an Object Adapter pattern. All loggers implement `LoggerProtocol` (`services/app/app/utils/logger.py`) and are injected into `AppLogger`, which fans out calls to all of them.
 
 | Class | Location | Behaviour |
 |---|---|---|
-| `AppLogger` | `app/logging/logger.py` | Fanout adapter; single public method `log(message, level, data, exc)`. `Level` enum exposed as `AppLogger.Level.{INFO,WARN,ERROR}` |
-| `ConsoleLogger` | `app/logging/logger.py` | stdout via Python `logging`; DEBUG in dev, WARNING in prod |
-| `SentryLogger` | `app/logging/sentry_logger.py` | `info`/`warn` → Sentry breadcrumbs; `error` → `capture_message` with extras |
-| `CloudWatchLogger` | `app/logging/cloudwatch_logger.py` | Structured JSON events via `watchtower`; supports `endpoint_url` for LocalStack |
-| `LokiLogger` | `app/logging/loki_logger.py` | POSTs structured JSON to Loki's `/loki/api/v1/push`; uses stdlib `urllib` only (no extra dependency); failures are silently swallowed |
+| `AppLogger` | `services/app/app/logging/logger.py` | Fanout adapter; single public method `log(message, level, data, exc)`. `Level` enum exposed as `AppLogger.Level.{INFO,WARN,ERROR}` |
+| `ConsoleLogger` | `services/app/app/logging/logger.py` | stdout via Python `logging`; DEBUG in dev, WARNING in prod |
+| `SentryLogger` | `services/app/app/logging/sentry_logger.py` | `info`/`warn` → Sentry breadcrumbs; `error` → `capture_message` with extras |
+| `CloudWatchLogger` | `services/app/app/logging/cloudwatch_logger.py` | Structured JSON events via `watchtower`; supports `endpoint_url` for LocalStack |
+| `LokiLogger` | `services/app/app/logging/loki_logger.py` | POSTs structured JSON to Loki's `/loki/api/v1/push`; uses stdlib `urllib` only (no extra dependency); failures are silently swallowed |
 
 `AppLogger` is created in `create_app()` and attached as `app.logger_adapter`. Sentry, CloudWatch, and Loki are **opt-in** — only wired when their env vars are set. CloudWatch init failure is non-fatal (logs a warning, app continues with remaining loggers). Loki push failures are silently swallowed.
 
@@ -209,10 +247,10 @@ logger = info.context.logger_adapter
 logger.log("upload failed", level=logger.Level.ERROR, data={"key": s3_key}, exc=e)
 ```
 
-**Data filtering:** `mask_sensitive()` in `app/logging/data_filter.py` recursively replaces values of sensitive keys (`password`, `token`, `secret`, `authorization`, etc.) with `***`. Applied automatically in `AppLogger.log()` before any logger sees the data. To add keys, extend `_SENSITIVE_KEYS` in `data_filter.py`.
+**Data filtering:** `mask_sensitive()` in `services/app/app/logging/data_filter.py` recursively replaces values of sensitive keys (`password`, `token`, `secret`, `authorization`, etc.) with `***`. Applied automatically in `AppLogger.log()` before any logger sees the data. To add keys, extend `_SENSITIVE_KEYS` in `data_filter.py`.
 
 **Sentry notes:**
-- JWT auth failures return 401 from `app/security.py` — Sentry captures these via `FastApiIntegration` automatically.
+- JWT auth failures return 401 from `services/app/app/security.py` — Sentry captures these via `FastApiIntegration` automatically.
 - `info`/`warn` calls appear as breadcrumbs inside Sentry error events, not as standalone events. This is intentional — sending every log as an event burns Sentry quota.
 
 **CloudWatch / LocalStack notes:**
@@ -272,9 +310,9 @@ Fargate is serverless — there is no accessible host OS, Docker socket, or cgro
 The only app-side requirement for the production setup is the `/metrics` endpoint — ADOT picks it up without any code changes.
 
 **Adding a new logger backend:**
-1. Create a class in `app/logging/` implementing `LoggerProtocol` (`info`, `warning`, `error` methods).
+1. Create a class in `services/app/app/logging/` implementing `LoggerProtocol` (`info`, `warning`, `error` methods).
 2. Instantiate it conditionally in `create_app()` and append to `loggers`.
-3. Add the required env var to `app/config.py` base `Config` class.
+3. Add the required env var to `services/app/app/config.py` base `Config` class.
 
 ### Error Handling
 
@@ -288,16 +326,16 @@ Each layer has a strict responsibility. Do not cross these boundaries:
 
 | Layer | Location | Responsibility |
 |---|---|---|
-| **Models** | `app/models/` | SQLAlchemy schema only — no business logic, no imports from API or service layers |
-| **Services** | `app/services/` | External integrations (S3, SQS, future: email, payments). Read config directly from `os.getenv()` — no framework context assumptions |
-| **REST handlers** | `app/api/v1/` | Parse request, validate input, call services/models, return `rest_api_response()`. No raw `jsonify()` calls outside utils |
-| **REST utils** | `app/api/utils/utils.py` | Shared REST helpers (`rest_api_response`). All reusable REST helper functions live here — never inline them in handlers |
-| **GraphQL resolvers** | `app/graphql_api/resolvers/` | Mirror REST handlers but return `Response[T]` typed objects. No direct HTTP response logic |
-| **GraphQL utils** | `app/graphql_api/utils.py` | Shared GraphQL helpers (e.g. model-to-type converters). All reusable GraphQL helper functions live here — never inline them in resolvers |
-| **GraphQL types** | `app/graphql_api/types/` | Strawberry type definitions only — no resolver logic |
-| **Extensions** | `app/extensions.py` | Defines SQLAlchemy `Base` (DeclarativeBase). Engine + session factory live in `app/database.py` and are initialized by `create_app()` |
-| **Config** | `app/config.py` | All configuration via `os.getenv()` at class definition time. Env vars are never read directly in handlers or services |
-| **Logging** | `app/logging/` | `AppLogger` + logger adapters (`ConsoleLogger`, `SentryLogger`, `CloudWatchLogger`, `LokiLogger`), `mask_sensitive` data filter. Logger attached to `app.state.logger_adapter`; accessed via `request.app.state.logger_adapter` in handlers |
+| **Models** | `services/app/app/models/` | SQLAlchemy schema only — no business logic, no imports from API or service layers |
+| **Services** | `services/app/app/services/` | External integrations (S3, SQS, future: email, payments). Read config directly from `os.getenv()` — no framework context assumptions |
+| **REST handlers** | `services/app/app/api/v1/` | Parse request, validate input, call services/models, return `rest_api_response()`. No raw `jsonify()` calls outside utils |
+| **REST utils** | `services/app/app/api/utils/utils.py` | Shared REST helpers (`rest_api_response`). All reusable REST helper functions live here — never inline them in handlers |
+| **GraphQL resolvers** | `services/app/app/graphql_api/resolvers/` | Mirror REST handlers but return `Response[T]` typed objects. No direct HTTP response logic |
+| **GraphQL utils** | `services/app/app/graphql_api/utils.py` | Shared GraphQL helpers (e.g. model-to-type converters). All reusable GraphQL helper functions live here — never inline them in resolvers |
+| **GraphQL types** | `services/app/app/graphql_api/types/` | Strawberry type definitions only — no resolver logic |
+| **Extensions** | `services/app/app/extensions.py` | Defines SQLAlchemy `Base` (DeclarativeBase). Engine + session factory live in `services/app/app/database.py` and are initialized by `create_app()` |
+| **Config** | `services/app/app/config.py` | All configuration via `os.getenv()` at class definition time. Env vars are never read directly in handlers or services |
+| **Logging** | `services/app/app/logging/` | `AppLogger` + logger adapters (`ConsoleLogger`, `SentryLogger`, `CloudWatchLogger`, `LokiLogger`), `mask_sensitive` data filter. Logger attached to `app.state.logger_adapter`; accessed via `request.app.state.logger_adapter` in handlers |
 
 ## Code Quality
 
@@ -420,22 +458,22 @@ with patch("app.models.user.bcrypt.gensalt",
 - REST response fields use snake_case throughout (`access_token`, `refresh_token`, `media_id`).
 
 **Responses:**
-- REST: always use `rest_api_response(success, message, data, status_code, request=request)` from `app/api/utils/utils.py`. Returns a `JSONResponse` — never return a raw dict.
+- REST: always use `rest_api_response(success, message, data, status_code, request=request)` from `services/app/app/api/utils/utils.py`. Returns a `JSONResponse` — never return a raw dict.
 - GraphQL: always return `Response[T]` with `success`, `message`, and optionally `data`. Never raise exceptions from resolvers.
 
 **Authentication:**
-- REST handlers: add `user_id: str = Depends(require_access_token)` (or `require_refresh_token`) from `app/security.py`.
+- REST handlers: add `user_id: str = Depends(require_access_token)` (or `require_refresh_token`) from `services/app/app/security.py`.
 - GraphQL resolvers: call `get_token_from_bearer(auth_header)` + `verify_access_token(token)` / `verify_refresh_token(token)` inside a `try/except` at the top of the resolver — FastAPI's `Depends()` cannot be used inside Strawberry resolvers.
 
 **Postman collection:** `postman_collection.json` at the repo root must be kept in sync with API changes. Update it whenever you add, remove, or rename an endpoint or change a request/response shape. The collection uses collection-level variables (`base_url`, `access_token`, `refresh_token`, `media_id`) and test scripts on Login/Upload requests to auto-capture tokens and IDs for chained requests.
 
 **Adding a new feature:**
-1. Add/update the SQLAlchemy model and register it in `app/models/__init__.py`.
+1. Add/update the SQLAlchemy model and register it in `services/app/app/models/__init__.py`.
 2. Generate and apply a migration: `alembic revision --autogenerate -m "description" && alembic upgrade head`.
-3. Add any external service logic to `app/services/`.
-4. Add a FastAPI router in `app/api/v1/` and include it in `app/api/v1/__init__.py`.
-5. Add a GraphQL resolver class in `app/graphql_api/resolvers/` and merge it into the schema via `merge_types` in `app/graphql_api/schema.py`.
-6. Add the corresponding type to `app/graphql_api/types/types.py` if needed.
+3. Add any external service logic to `services/app/app/services/`.
+4. Add a FastAPI router in `services/app/app/api/v1/` and include it in `services/app/app/api/v1/__init__.py`.
+5. Add a GraphQL resolver class in `services/app/app/graphql_api/resolvers/` and merge it into the schema via `merge_types` in `services/app/app/graphql_api/schema.py`.
+6. Add the corresponding type to `services/app/app/graphql_api/types/types.py` if needed.
 
 ## Lambda Worker Dockerfiles
 
@@ -448,9 +486,9 @@ Two Dockerfiles exist for these two runtimes:
 | File | Used by | CMD |
 |---|---|---|
 | `lambda/Dockerfile` | `docker-compose.yml` worker service | `python handler.py` → runs `poll()` |
-| `lambda/Dockerfile.lambda` | `deploy.yml` CI/CD worker image build | `handler.handler` → Lambda RIC calls `handler()` |
+| `lambda/Dockerfile.lambda` | `deploy-dev.yml` / `deploy-prod.yml` CI/CD worker image build | `handler.handler` → Lambda RIC calls `handler()` |
 
-Never use `Dockerfile` for the CI/CD image build — it produces a long-running process that is not a valid Lambda container. The deploy workflow already references `Dockerfile.lambda`.
+Never use `Dockerfile` for the CI/CD image build — it produces a long-running process that is not a valid Lambda container. The deploy workflows already reference `Dockerfile.lambda`.
 
 ## CI/CD Pipeline
 
@@ -498,12 +536,13 @@ Use a two-phase approach for breaking changes: first deploy adds the new column 
 
 ### Adding a new microservice
 
-1. Add its ECR repo to `terraform/modules/ecr/main.tf`
-2. Add its ECS service + task definition to `terraform/` (or a new module)
-3. Add a build step to the `build` job in `deploy.yml`
-4. Add a `run_migration` call in `migrate-dev` and `migrate-prod` (if it has its own DB)
-5. Add a deploy step in `deploy-dev` and `deploy-prod` at the correct tier
-6. Add its GitHub environment vars (`*_TASK_FAMILY`, `*_SERVICE`) via `terraform output`
+1. Create `services/<name>/` with its Dockerfile.
+2. Add ECR repo to `terraform/modules/ecr/main.tf`.
+3. Add ECS service + task definition to `terraform/`.
+4. Add build step in `deploy-dev.yml` and `deploy-prod.yml` with `context: .` and `file: services/<name>/Dockerfile`.
+5. Add `run_migration` call in migrate jobs if it has its own DB.
+6. Add deploy step at the correct tier.
+7. Add GitHub environment vars via `terraform output`.
 
 ### Required GitHub secrets and variables
 

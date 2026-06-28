@@ -51,7 +51,9 @@ class TestUpload:
             res = client.post(
                 "/api/v1/media/upload",
                 headers=auth_headers,
-                files={"file": ("f.jpg", io.BytesIO(b"data"), "application/octet-stream")},
+                files={
+                    "file": ("f.jpg", io.BytesIO(b"data"), "application/octet-stream")
+                },
             )
         assert res.status_code == 500
 

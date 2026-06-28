@@ -65,8 +65,8 @@ def app(test_session_factory):
 @pytest.fixture(autouse=True)
 def clean_tables(test_engine):
     yield
+
     from app.extensions import Base
-    from sqlalchemy import text
 
     with test_engine.connect() as conn:
         for table in reversed(Base.metadata.sorted_tables):

@@ -47,7 +47,9 @@ def upgrade():
         sa.Column("processed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_events_sqs_message_id", "events", ["sqs_message_id"], unique=True)
+    op.create_index(
+        "ix_events_sqs_message_id", "events", ["sqs_message_id"], unique=True
+    )
 
 
 def downgrade():

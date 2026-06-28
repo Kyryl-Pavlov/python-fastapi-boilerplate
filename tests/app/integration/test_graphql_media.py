@@ -165,9 +165,9 @@ class TestUploadFile:
                 return_value=_FAKE_URL,
             ),
         ):
-            payload = _upload_file(client, gql_auth_headers["access"]).json()[
-                "data"
-            ]["uploadFile"]
+            payload = _upload_file(client, gql_auth_headers["access"]).json()["data"][
+                "uploadFile"
+            ]
 
         assert payload["success"] is True
         assert payload["data"]["mediaId"]
@@ -178,8 +178,8 @@ class TestUploadFile:
             "app.graphql_api.resolvers.media.upload_file",
             side_effect=Exception("S3 down"),
         ):
-            payload = _upload_file(client, gql_auth_headers["access"]).json()[
-                "data"
-            ]["uploadFile"]
+            payload = _upload_file(client, gql_auth_headers["access"]).json()["data"][
+                "uploadFile"
+            ]
         assert payload["success"] is False
         assert "upload failed" in payload["message"]
