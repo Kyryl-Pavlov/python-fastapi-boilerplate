@@ -10,6 +10,7 @@ Run:
 """
 
 import io
+import uuid
 
 
 def test_health_check(http, base_url):
@@ -21,7 +22,10 @@ def test_health_check(http, base_url):
 
 
 def test_auth_register_and_login(http, base_url):
-    creds = {"email": "smoke-auth@ci-test.internal", "password": "SmokeAuth1!"}
+    creds = {
+        "email": f"smoke-{uuid.uuid4().hex[:8]}@ci-test.internal",
+        "password": "SmokeAuth1!",
+    }
     assert http.post(f"{base_url}/auth/register", json=creds).status_code == 201
 
     res = http.post(f"{base_url}/auth/login", json=creds)
@@ -40,7 +44,7 @@ def test_media_upload_and_get_presigned_url(http, base_url, auth_headers):
     res = http.post(
         f"{base_url}/media/upload",
         headers=auth_headers,
-        files={"file": ("e2e.txt", io.BytesIO(b"e2e smoke content"), "text/plain")},
+        files={"file": ("e2e.png", io.BytesIO(b"e2e smoke content"), "image/png")},
     )
     assert res.status_code == 201
     data = res.json()["data"]

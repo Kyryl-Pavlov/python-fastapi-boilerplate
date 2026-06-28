@@ -58,9 +58,7 @@ class TestList:
     def test_response_contains_required_fields(self, client, auth_headers, db_session):
         from app.models.event import Event
 
-        db_session.add(
-            Event(sqs_message_id="msg-002", type="ping", status="processed")
-        )
+        db_session.add(Event(sqs_message_id="msg-002", type="ping", status="processed"))
         db_session.commit()
 
         data = client.get("/api/v1/events", headers=auth_headers).json()["data"][0]

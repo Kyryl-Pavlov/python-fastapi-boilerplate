@@ -2,7 +2,6 @@ import json
 import os
 from unittest.mock import MagicMock
 
-import pytest
 from starlette.requests import Request
 
 os.environ.setdefault("SECRET_KEY", "test-secret-key-minimum-32-bytes!!!!")
@@ -45,7 +44,9 @@ class TestRestApiResponse:
         assert body["data"] == {}
 
     def test_failure_with_custom_status(self):
-        response = rest_api_response(success=False, message="Not found", status_code=404)
+        response = rest_api_response(
+            success=False, message="Not found", status_code=404
+        )
         assert response.status_code == 404
         body = _parse(response)
         assert body["success"] is False
@@ -69,7 +70,9 @@ class TestRestApiResponse:
 
     def test_logger_adapter_called_when_present(self):
         mock_adapter = MagicMock()
-        rest_api_response(success=True, message="ok", request=_make_request(mock_adapter))
+        rest_api_response(
+            success=True, message="ok", request=_make_request(mock_adapter)
+        )
         mock_adapter.log.assert_called_once()
         _, kwargs = mock_adapter.log.call_args
         assert kwargs["level"] == AppLogger.Level.INFO

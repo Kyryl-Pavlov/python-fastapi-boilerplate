@@ -15,7 +15,10 @@ def cache_ping(request: Request):
     cache = getattr(request.app.state, "cache", None)
     if cache is None:
         return rest_api_response(
-            success=False, message="Redis not configured", status_code=503, request=request
+            success=False,
+            message="Redis not configured",
+            status_code=503,
+            request=request,
         )
     return rest_api_response(
         data={"redis": "ok" if cache.ping() else "unavailable"}, request=request
@@ -27,7 +30,10 @@ def cache_get(request: Request):
     cache = getattr(request.app.state, "cache", None)
     if cache is None:
         return rest_api_response(
-            success=False, message="Redis not configured", status_code=503, request=request
+            success=False,
+            message="Redis not configured",
+            status_code=503,
+            request=request,
         )
 
     cached = cache.get(CACHE_KEY)
@@ -55,7 +61,10 @@ def cache_invalidate(request: Request):
     cache = getattr(request.app.state, "cache", None)
     if cache is None:
         return rest_api_response(
-            success=False, message="Redis not configured", status_code=503, request=request
+            success=False,
+            message="Redis not configured",
+            status_code=503,
+            request=request,
         )
 
     deleted = cache.delete(CACHE_KEY)

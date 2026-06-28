@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["services/app"]
 filterwarnings = [
     "ignore::DeprecationWarning:fastapi",
     "ignore::DeprecationWarning:starlette",
@@ -22,6 +22,7 @@ select = [
 ]
 ignore = [
     "E501",  # line too long — handled by the formatter
+    "B008",  # Depends() in argument defaults is the standard FastAPI DI pattern
 ]
 
 [tool.ruff.lint.isort]

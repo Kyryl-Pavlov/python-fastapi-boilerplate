@@ -43,9 +43,9 @@ class TestRegister:
         assert "already registered" in payload["message"]
 
     def test_missing_password(self, gql):
-        payload = gql(_REGISTER, {"email": "a@b.com", "password": ""}).json()[
-            "data"
-        ]["register"]
+        payload = gql(_REGISTER, {"email": "a@b.com", "password": ""}).json()["data"][
+            "register"
+        ]
         assert payload["success"] is False
 
     def test_email_normalized_to_lowercase(self, gql, client):
@@ -64,9 +64,9 @@ class TestLogin:
         assert payload["data"]["refreshToken"]
 
     def test_wrong_password(self, gql, registered_user):
-        payload = gql(_LOGIN, {**registered_user, "password": "wrong"}).json()[
-            "data"
-        ]["login"]
+        payload = gql(_LOGIN, {**registered_user, "password": "wrong"}).json()["data"][
+            "login"
+        ]
         assert payload["success"] is False
         assert "Invalid credentials" in payload["message"]
 
